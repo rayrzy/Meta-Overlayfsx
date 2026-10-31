@@ -34,7 +34,7 @@ if ! mountpoint -q "$MNT_DIR" 2>/dev/null; then
         exit 1
     fi
 
-    # Requests from the WebUI (all need the image unmounted): restore, backup, resize.
+    # Requests from the WebUI (all need the image unmounted): restore, backup, optimize, resize.
     # Each flag is consumed first, so a failing request can never repeat on every boot.
     XCP_BIN="$BINARY"
     if [ -f "$CONF_DIR/restore_backup" ]; then
@@ -47,6 +47,7 @@ if ! mountpoint -q "$MNT_DIR" 2>/dev/null; then
         log INFO "Creating modules image backup..."
         backup_image "$IMG_FILE" || log WARN "Backup was not created"
     fi
+    apply_pending_optimize "$IMG_FILE"
     apply_pending_resize "$IMG_FILE"
 
     # Cheap when the image was cleanly unmounted; repairs it after a crash/power loss.

@@ -37,6 +37,13 @@ if [ ! -d "$MODULES_DIR/$ID" ]; then
     exit 5
 fi
 
+. "$META_DIR/utils.sh" || exit 1
+if ! acquire_lock "restore module files" 0; then
+    echo "modules image is busy ($(lock_holder))" >&2
+    exit 6
+fi
+trap release_lock EXIT
+
 COUNT=0
 FAILED=0
 for part in $PARTITIONS; do

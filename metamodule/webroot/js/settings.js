@@ -380,7 +380,7 @@ export default class SettingsPage {
     async optimizeStorage(btn) {
         const ok = await this.app.utils.confirmAction(
             'Optimize Storage',
-            'Reclaim unused space from the modules image. The image is trimmed in place; if that is not supported a verified compacted copy is made instead.<br><br>Do not install or remove modules while this runs.',
+            'Reclaim unused space from the modules image. If the system supports it the image is trimmed right now; otherwise the optimization runs safely during the next boot, while the image is not in use.',
             'Optimize'
         );
         if (!ok) return;
@@ -392,13 +392,17 @@ export default class SettingsPage {
         const q = v => this.app.utils.shQuote(v);
         try {
             this.app.utils.showToast('Starting storage optimization', 'info');
-            // Step 1 (preferred): fstrim on the mounted loop device punches holes directly in
-            // the image file. Nothing is copied or replaced, so nothing can be lost.
-            // Step 2 (fallback): compacted copy, which only replaces the image after it has
-            // been fully verified. Every step is chained: a failure aborts and the original stays.
+            // Live path: fstrim on the mounted loop device punches holes directly in the image
+            // file. Nothing is copied or replaced. It runs under the operation lock so it can
+            // never overlap with a module install or update.
+            // Otherwise the request is queued and applied at boot with the image unmounted
+            // (metamount.sh). The image is never filled with zeros, copied or replaced while mounted.
             const cmd = `
-                IMG=${q(CONFIG.IMG_FILE)}; MNT=${q(CONFIG.MNT_DIR)}; BIN=${q(CONFIG.BINARY)}
+                IMG=${q(CONFIG.IMG_FILE)}; MNT=${q(CONFIG.MNT_DIR)}; CONF=${q(CONFIG.CONF_DIR)}
+                . ${q(CONFIG.UTILS_SH)} || exit 1
                 mountpoint -q "$MNT" || { echo "Image is not mounted" >&2; exit 1; }
+                acquire_lock "optimize storage" 0 || { echo "Modules image is busy ($(lock_holder)), try again in a moment" >&2; exit 1; }
+                trap release_lock EXIT
                 sync
                 before=$(du -k "$IMG" 2>/dev/null | awk '{print $1}')
                 if command -v fstrim >/dev/null 2>&1 && fstrim "$MNT" >/dev/null 2>&1; then
@@ -406,25 +410,17 @@ export default class SettingsPage {
                     echo "trim:$before:$after"
                     exit 0
                 fi
-                NEW="$IMG.new"
-                rm -f "$NEW"
-                fail() { rm -f "$NEW"; echo "$1" >&2; exit 1; }
-                dd if=/dev/zero of="$MNT/zero.fill" bs=1M 2>/dev/null; rm -f "$MNT/zero.fill"; sync
-                "$BIN" xcp "$IMG" "$NEW" --punch-hole || fail "Compaction failed"
-                [ "$(stat -c%s "$IMG")" = "$(stat -c%s "$NEW")" ] || fail "Compacted image has a different size"
-                if command -v e2fsck >/dev/null 2>&1; then
-                    e2fsck -fn "$NEW" >/dev/null 2>&1 || fail "Verification failed (image busy), original left untouched. Try again right after a reboot."
-                fi
-                chmod 644 "$NEW" && chcon u:object_r:ksu_file:s0 "$NEW" 2>/dev/null
-                mv "$NEW" "$IMG" || fail "Could not replace image"
-                after=$(du -k "$IMG" 2>/dev/null | awk '{print $1}')
-                echo "copy:$before:$after"
+                mkdir -p "$CONF" && : > "$CONF/optimize_now" || { echo "Cannot schedule optimization" >&2; exit 1; }
+                echo "scheduled:$before:$before"
             `;
             const out = (await this.app.utils.execCommand(cmd)).trim().split('\n').pop();
             const [mode, before, after] = out.split(':');
-            const freed = Math.max(0, (parseInt(before) || 0) - (parseInt(after) || 0)) * 1024;
-            const msg = `Storage optimized, reclaimed ${this.app.utils.formatBytes(freed)}.`;
-            this.app.utils.showToast(mode === 'copy' ? `${msg} Reboot to apply.` : msg, 'success');
+            if (mode === 'scheduled') {
+                this.app.utils.showToast('Optimization scheduled. Reboot to apply.', 'success');
+            } else {
+                const freed = Math.max(0, (parseInt(before) || 0) - (parseInt(after) || 0)) * 1024;
+                this.app.utils.showToast(`Storage optimized, reclaimed ${this.app.utils.formatBytes(freed)}.`, 'success');
+            }
             await this.update();
         } catch (err) {
             this.app.utils.logToFile(`Optimization engine failure: ${err.message}`, 'ERROR');

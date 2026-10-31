@@ -79,13 +79,18 @@ if [ -f "$EXISTING_IMG" ]; then
         abort "! Not enough free storage in /data: need $((NEED_KB / 1024)) MB, have $((DATA_FREE_KB / 1024)) MB. Nothing was changed."
     fi
 
-    # Make sure the old image is not being written to while it is copied.
+    # Nothing else may write to the old image while it is copied.
+    acquire_lock "image copy during update" 60 || {
+        abort "! Modules image is busy ($(lock_holder)). Try again in a moment. Nothing was changed."
+    }
     sync
 
     if ! "$MODPATH/overlayfsx" xcp "$EXISTING_IMG" "$IMG_FILE"; then
+        release_lock
         rm -f "$IMG_FILE"
         abort "! Failed to copy existing modules image. Nothing was changed."
     fi
+    release_lock
 
     OLD_BYTES=$(stat -c%s "$EXISTING_IMG" 2>/dev/null)
     NEW_BYTES=$(stat -c%s "$IMG_FILE" 2>/dev/null)

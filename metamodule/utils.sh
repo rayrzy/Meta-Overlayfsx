@@ -130,6 +130,108 @@ apply_pending_resize() {
     return 0
 }
 
+# --- Operation lock -------------------------------------------------------------
+# Image-changing operations that run while the image is mounted (module install, update copy,
+# file restore, live trim) must never overlap. The lock is a directory (mkdir is atomic) that
+# stores the owner's pid and the boot id, so a lock left by a crash or an earlier boot is
+# detected as stale and removed automatically.
+#   acquire_lock <name> [wait_seconds]   0 = acquired, 1 = busy (see lock_holder)
+#   release_lock
+LOCK_DIR="$CONF_DIR/op.lock"
+LOCK_DEPTH=0
+
+boot_id() {
+    cat /proc/sys/kernel/random/boot_id 2>/dev/null
+}
+
+lock_holder() {
+    cat "$LOCK_DIR/name" 2>/dev/null || echo "another operation"
+}
+
+lock_is_stale() {
+    local pid
+    if [ ! -f "$LOCK_DIR/pid" ]; then
+        # Owner died between mkdir and writing its pid, or is about to: only stale when old.
+        [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +1 2>/dev/null)" ]
+        return
+    fi
+    [ "$(cat "$LOCK_DIR/boot" 2>/dev/null)" = "$(boot_id)" ] || return 0
+    pid=$(cat "$LOCK_DIR/pid" 2>/dev/null)
+    is_uint "$pid" || return 0
+    kill -0 "$pid" 2>/dev/null || return 0
+    return 1
+}
+
+acquire_lock() {
+    local name="$1" max_wait="${2:-0}" waited=0
+    mkdir -p "$CONF_DIR" || return 1
+
+    # Re-entrant for the same process.
+    if [ "$LOCK_DEPTH" -gt 0 ] && [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$$" ]; then
+        LOCK_DEPTH=$((LOCK_DEPTH + 1))
+        return 0
+    fi
+
+    while :; do
+        if mkdir "$LOCK_DIR" 2>/dev/null; then
+            echo "$$" > "$LOCK_DIR/pid"
+            boot_id > "$LOCK_DIR/boot"
+            echo "$name" > "$LOCK_DIR/name"
+            LOCK_DEPTH=1
+            return 0
+        fi
+        if lock_is_stale; then
+            rm -rf "$LOCK_DIR" 2>/dev/null
+            [ -d "$LOCK_DIR" ] && return 1
+            continue
+        fi
+        [ "$waited" -ge "$max_wait" ] && return 1
+        sleep 1
+        waited=$((waited + 1))
+    done
+}
+
+release_lock() {
+    [ "$LOCK_DEPTH" -gt 0 ] || return 0
+    LOCK_DEPTH=$((LOCK_DEPTH - 1))
+    [ "$LOCK_DEPTH" -eq 0 ] && rm -rf "$LOCK_DIR" 2>/dev/null
+    return 0
+}
+
+# --- Offline optimize ---------------------------------------------------------------
+# Reclaims the unused blocks of the image file. It runs at boot while the image is NOT mounted:
+# e2fsck punches holes for every free block, so nothing is copied, nothing is zero-filled and
+# no file is replaced (the live "zero-fill + copy a mounted image" approach is gone).
+# Request: $CONF_DIR/optimize_now (consumed first, so a failure never repeats every boot).
+apply_pending_optimize() {
+    local img="$1" flag="$CONF_DIR/optimize_now" before after rc
+    [ -f "$flag" ] || return 0
+    rm -f "$flag"
+
+    [ -f "$img" ] || return 1
+    if ! command -v e2fsck >/dev/null 2>&1; then
+        log WARN "e2fsck not available, optimize request ignored"
+        return 1
+    fi
+
+    before=$(used_kb "$img")
+    log INFO "Optimizing image (offline)"
+
+    # Never trim an image that is not known to be consistent.
+    fsck_image "$img" force || { log ERROR "Optimize aborted: image check failed"; return 1; }
+
+    e2fsck -fy -E discard "$img" >/dev/null 2>&1; rc=$?
+    if [ "$rc" -gt 2 ]; then
+        log WARN "e2fsck could not discard unused blocks (rc=$rc), image left as it was"
+    fi
+
+    fsck_image "$img" check || { log ERROR "Image check failed after optimize"; return 1; }
+
+    after=$(used_kb "$img")
+    log INFO "Image optimized: ${before} KB -> ${after} KB used on disk"
+    return 0
+}
+
 # --- Image backup / restore ---------------------------------------------------
 # One backup generation is kept OUTSIDE the module directory (which KernelSU replaces on
 # every update). Requests from the WebUI are plain flag files processed at boot while the
@@ -402,6 +504,18 @@ check_conflicts() {
 # partition was copied. A failed or interrupted copy therefore can never replace a
 # working module at the next boot.
 post_install_to_image() {
+    local rc
+    if ! acquire_lock "module install" 60; then
+        log ERROR "Modules image is busy ($(lock_holder)), try again in a moment"
+        return 1
+    fi
+    _post_install_to_image
+    rc=$?
+    release_lock
+    return $rc
+}
+
+_post_install_to_image() {
     log INFO "Moving module content to image"
 
     if [ -d "$MNT_DIR" ]; then

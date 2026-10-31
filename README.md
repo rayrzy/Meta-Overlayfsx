@@ -32,7 +32,7 @@ A comprehensive dashboard integrated directly into KernelSU Manager.
 
 ### 4. ⚡ Storage Optimization
 - **Smart Management:** Uses sparse files for the module image.
-- **Optimization Tool:** Built-in `xcp` command punches holes in the image file, reclaiming disk space from deleted modules without destroying the image.
+- **Optimization Tool:** Reclaims disk space from deleted modules by punching holes in the image file: `fstrim` when supported, otherwise `e2fsck -E discard` at the next boot while the image is unmounted. The image is never copied or replaced while mounted.
 
 ## 📥 Installation
 
@@ -69,13 +69,13 @@ View exactly what the kernel is enforcing right now:
 
 ### Storage Optimization
 
-Reclaim disk space from deleted or updated modules (requires reboot for size changes to appear in file managers):
+Reclaim disk space from deleted or updated modules with the one-tap **Optimize Storage** button in the WebUI Settings page. If the kernel cannot trim the mounted image, the request is queued and applied during the next boot. To request it by hand:
 
 ```bash
-/data/adb/modules/meta-overlayfsx/overlayfsx xcp <src> <dst> --punch-hole
+mkdir -p /data/adb/overlayfsx.d && touch /data/adb/overlayfsx.d/optimize_now
 ```
 
-Or use the one-tap **Optimize Storage** button in the WebUI Settings page.
+`overlayfsx xcp <src> <dst> --punch-hole` is still available for copying an **unmounted** image sparsely.
 
 ## 🏗️ Building
 

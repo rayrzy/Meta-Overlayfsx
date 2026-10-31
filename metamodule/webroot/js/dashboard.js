@@ -1,3 +1,7 @@
+// The image counts as almost full below 64 MB free or below 10% free.
+const LOW_SPACE_BYTES = 64 * 1048576;
+const LOW_SPACE_RATIO = 0.10;
+
 export default class DashboardPage {
     constructor(app) {
         this.app = app;
@@ -91,8 +95,22 @@ export default class DashboardPage {
         if (moduleStats.updating > 0) statsHtml.push(`<span class="text-yellow">${moduleStats.updating} Update</span>`);
         if (moduleStats.uninstalling > 0) statsHtml.push(`<span class="text-red-dim">${moduleStats.uninstalling} Uninstall</span>`);
 
+        // Warn before the image fills up: a full image makes module installs fail half-way.
+        const lowSpace = imageUsage.mounted && imageUsage.total > 0 &&
+            (free < LOW_SPACE_BYTES || free / imageUsage.total < LOW_SPACE_RATIO);
+        const lowSpaceHtml = lowSpace ? `
+            <div class="low-space-banner" role="alert">
+                <div class="lsb-icon">${this.app.icon('exclamation-triangle')}</div>
+                <div class="lsb-text">
+                    <strong>Modules image is almost full</strong>
+                    <span>${imageUsage.freeFormatted} free of ${this.app.utils.formatBytes(imageUsage.total)}. Installing or updating modules may fail.</span>
+                </div>
+                <button class="s-btn" id="btn-increase-image">Increase size</button>
+            </div>` : '';
+
         return `
         <div class="dashboard-page">
+            ${lowSpaceHtml}
             <div class="storage-donut-card">
                 <div class="donut-wrap">
                     <div class="donut-svg-wrap">
@@ -299,6 +317,7 @@ export default class DashboardPage {
 
     async bindEvents() {
         document.getElementById('btn-view-modules')?.addEventListener('click', () => this.app.showPage('modules'));
+        document.getElementById('btn-increase-image')?.addEventListener('click', () => this.app.showPage('settings'));
     }
 
     async update() {
