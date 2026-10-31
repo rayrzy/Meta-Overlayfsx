@@ -85,6 +85,16 @@ export default class Utils {
         ksu.exec(`echo '${entry}' >> "${CONFIG.LOG_FILE}"`, '{}', callbackName);
     }
 
+    // "5 min ago", "3 h ago", "2 d ago" for an epoch in seconds.
+    static timeAgo(epochSec) {
+        const diff = Math.floor(Date.now() / 1000) - epochSec;
+        if (!(epochSec > 0) || diff < 0) return 'unknown';
+        if (diff < 90) return 'just now';
+        if (diff < 5400) return `${Math.round(diff / 60)} min ago`;
+        if (diff < 129600) return `${Math.round(diff / 3600)} h ago`;
+        return `${Math.round(diff / 86400)} d ago`;
+    }
+
     static formatBytes(bytes, decimals = 1) {
         if (!bytes || bytes === 0) return '0 B';
         const k = 1024;

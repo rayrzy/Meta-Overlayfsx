@@ -10,7 +10,9 @@ export default class DashboardPage {
             ksuVersion: '—',
             moduleStats: { total: 0, active: 0, inactive: 0, updating: 0, uninstalling: 0 },
             partitionData: [],
-            imageUsage: { total: 0, used: 0, free: 0, percent: 0, mounted: false, exists: false, freeFormatted: '0 B' }
+            imageUsage: { total: 0, used: 0, free: 0, percent: 0, mounted: false, exists: false, freeFormatted: '0 B' },
+            health: { status: '', epoch: 0 },
+            backupEpoch: 0
         };
     }
 
@@ -88,6 +90,19 @@ export default class DashboardPage {
 
         const mountStatusClass = imageUsage.mounted ? 'ok' : (imageUsage.exists ? 'warn' : 'bad');
         const mountStatusText = imageUsage.mounted ? 'Mounted' : (imageUsage.exists ? 'Unmounted' : 'No Image');
+
+        // Result of the last boot-time filesystem check, and age of the last backup.
+        const u = this.app.utils;
+        const { health, backupEpoch } = this.data;
+        const healthView = {
+            clean:        { text: 'Clean',        cls: 'ok' },
+            repaired:     { text: 'Repaired',     cls: 'warn' },
+            failed:       { text: 'Errors found', cls: 'bad' },
+            mount_failed: { text: 'Mount failed', cls: 'bad' }
+        }[health.status] || { text: 'Not recorded', cls: '' };
+        const healthText = health.epoch ? `${healthView.text} · ${u.timeAgo(health.epoch)}` : healthView.text;
+        const backupText = backupEpoch ? u.timeAgo(backupEpoch) : 'None';
+        const backupCls = backupEpoch ? 'ok' : 'warn';
 
         const statsHtml = [];
         statsHtml.push(`<span class="text-green">${moduleStats.active} Active</span>`);
@@ -183,6 +198,8 @@ export default class DashboardPage {
                         <div class="info-row"><span class="k">Status</span><span class="v ${mountStatusClass}">${mountStatusText}</span></div>
                         <div class="info-row"><span class="k">File</span><span class="v ${imageUsage.exists ? 'ok' : 'bad'}">${imageUsage.exists ? 'Found' : 'Missing'}</span></div>
                         <div class="info-row"><span class="k">Filesystem</span><span class="v">ext4</span></div>
+                        <div class="info-row"><span class="k">Last check</span><span class="v ${healthView.cls}">${u.escapeHtml(healthText)}</span></div>
+                        <div class="info-row"><span class="k">Backup</span><span class="v ${backupCls}">${u.escapeHtml(backupText)}</span></div>
                     </div>
                 </div>
 
@@ -222,6 +239,20 @@ export default class DashboardPage {
             };
 
             this.data.imageUsage = await utils.getStorageUsage(CONFIG.IMG_FILE, CONFIG.MNT_DIR);
+            try {
+                const q = utils.shQuote;
+                const hb = await utils.execCommand(`
+                    [ -f ${q(CONFIG.HEALTH_FILE)} ] && echo "health:$(cat ${q(CONFIG.HEALTH_FILE)})"
+                    [ -f ${q(CONFIG.BACKUP_FILE)} ] && echo "bak:$(stat -c %Y ${q(CONFIG.BACKUP_FILE)})"
+                    true
+                `);
+                for (const line of hb.split('\n')) {
+                    const m = line.trim().match(/^health:(\d+) ([a-z_]+) /);
+                    if (m) this.data.health = { epoch: parseInt(m[1], 10), status: m[2] };
+                    const b = line.trim().match(/^bak:(\d+)$/);
+                    if (b) this.data.backupEpoch = parseInt(b[1], 10);
+                }
+            } catch { /* optional info */ }
             this.data.partitionData = [];
 
             if (this.data.imageUsage.mounted) {

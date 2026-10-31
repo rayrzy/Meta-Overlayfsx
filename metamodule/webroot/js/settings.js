@@ -73,7 +73,7 @@ export default class SettingsPage {
                 </div>
                 <div class="s-row-static border-none pb-4">
                     <div class="s-row-body">
-                        <div class="s-row-label-desc">Compacts the overlayfsx image file to reclaim empty space left behind by deleted or updated modules.</div>
+                        <div class="s-row-label-desc">Reclaims empty space left behind by deleted or updated modules. When the system cannot trim the live image, it runs safely during the next boot.</div>
                     </div>
                 </div>
                 <div class="s-actions pt-6">
@@ -125,6 +125,26 @@ export default class SettingsPage {
                     </button>
                     <button class="s-btn danger" id="clear-logs">
                         ${this.app.icon('trash')} Clear
+                    </button>
+                </div>
+            </div>
+
+            <div class="s-plane">
+                <div class="s-plane-head">
+                    <div class="s-plane-icon icon-gray">
+                        ${this.app.icon('info-circle')}
+                    </div>
+                    <div class="s-plane-title">Diagnostics</div>
+                </div>
+                <div class="s-row-static border-none">
+                    <div class="s-row-body">
+                        <div class="s-row-label">Bug report</div>
+                        <div class="s-row-sub">Collects versions, image state, filesystem info, kernel messages and the log into one text report, copies it and saves it to Download. It contains the device model and module ids, no personal files. Read it before sharing.</div>
+                    </div>
+                </div>
+                <div class="s-actions">
+                    <button class="s-btn primary full" id="collect-diag">
+                        ${this.app.icon('copy')} Collect &amp; copy
                     </button>
                 </div>
             </div>
@@ -324,6 +344,7 @@ export default class SettingsPage {
 
     async bindEvents() {
         document.getElementById('view-logs')?.addEventListener('click', () => this.viewLogs());
+        document.getElementById('collect-diag')?.addEventListener('click', e => this.collectDiagnostics(e.currentTarget));
         document.getElementById('clear-logs')?.addEventListener('click', async () => {
             const ok = await this.app.utils.confirmAction('Clear Logs', 'Delete all log entries? This cannot be undone.', 'Clear');
             if (ok) await this.clearLogs();
@@ -465,6 +486,35 @@ export default class SettingsPage {
         } catch (err) {
             utils.showToast(`Failed: ${err.message}`, 'error');
         } finally {
+            btn.disabled = false;
+        }
+    }
+
+    async collectDiagnostics(btn) {
+        const u = this.app.utils;
+        const orig = btn.innerHTML;
+        btn.innerHTML = `${this.app.icon('spinner', 'fa-spin')} Collecting...`;
+        btn.disabled = true;
+        try {
+            const q = u.shQuote;
+            // The first line tells whether the copy in Download worked, the rest is the report.
+            const out = await u.execCommand(`
+                F=${q(CONFIG.CONF_DIR + '/diagnostics.txt')}
+                mkdir -p ${q(CONFIG.CONF_DIR)}
+                sh ${q(CONFIG.DIAG_SH)} > "$F" 2>&1
+                if cp "$F" /sdcard/Download/overlayfsx-diagnostics.txt 2>/dev/null; then echo "saved:1"; else echo "saved:0"; fi
+                cat "$F"
+            `);
+            const nl = out.indexOf('\n');
+            const saved = out.slice(0, nl).trim() === 'saved:1';
+            const report = out.slice(nl + 1);
+            await u.copyToClipboard(report);
+            u.showToast(saved ? 'Report saved to Download/overlayfsx-diagnostics.txt' : `Report saved to ${CONFIG.CONF_DIR}/diagnostics.txt`, 'success');
+        } catch (err) {
+            u.logToFile(`Diagnostics failed: ${err.message}`, 'ERROR');
+            u.showToast(`Diagnostics failed: ${err.message}`, 'error');
+        } finally {
+            btn.innerHTML = orig;
             btn.disabled = false;
         }
     }

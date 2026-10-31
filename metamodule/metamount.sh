@@ -42,21 +42,41 @@ if ! mountpoint -q "$MNT_DIR" 2>/dev/null; then
         log INFO "Restoring modules image from backup..."
         restore_image_backup "$IMG_FILE" || log ERROR "Restore from backup failed"
     fi
+    BACKUP_DONE=0
     if [ -f "$CONF_DIR/backup_now" ]; then
         rm -f "$CONF_DIR/backup_now"
         log INFO "Creating modules image backup..."
-        backup_image "$IMG_FILE" || log WARN "Backup was not created"
+        if backup_image "$IMG_FILE"; then BACKUP_DONE=1; else log WARN "Backup was not created"; fi
     fi
+
+    # Optimize and resize rewrite the image, so a verified backup is made first (once per boot).
+    # Best effort: a failed backup is logged and the operation still runs.
+    # Opt out with: touch /data/adb/overlayfsx.d/no_auto_backup
+    pre_op_backup() {
+        [ "$BACKUP_DONE" -eq 1 ] && return 0
+        [ -f "$CONF_DIR/no_auto_backup" ] && return 0
+        log INFO "Backing up the image before $1..."
+        if backup_image "$IMG_FILE"; then
+            BACKUP_DONE=1
+        else
+            log WARN "Backup before $1 failed, continuing without it"
+        fi
+    }
+    [ -f "$CONF_DIR/optimize_now" ] && pre_op_backup "optimize"
     apply_pending_optimize "$IMG_FILE"
+    [ -f "$CONF_DIR/resize_mb" ] && pre_op_backup "resize"
     apply_pending_resize "$IMG_FILE"
 
     # Cheap when the image was cleanly unmounted; repairs it after a crash/power loss.
     fsck_image "$IMG_FILE" preen || log WARN "Image check reported problems, attempting mount anyway"
+    record_health "$FSCK_LAST_RC"
 
     if ! mount_image; then
         log WARN "Mount failed, running full repair and retrying once"
         fsck_image "$IMG_FILE" force
+        record_health "$FSCK_LAST_RC"
         mount_image || {
+            record_health mount_failed
             log ERROR "Failed to mount image"
             exit 1
         }

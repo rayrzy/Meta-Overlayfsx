@@ -77,6 +77,10 @@ mkdir -p /data/adb/overlayfsx.d && touch /data/adb/overlayfsx.d/optimize_now
 
 `overlayfsx xcp <src> <dst> --punch-hole` is still available for copying an **unmounted** image sparsely.
 
+### Diagnostics
+
+If something goes wrong, open **Settings → Diagnostics → Collect & copy** in the WebUI (or run `sh /data/adb/metamodule/diag.sh > report.txt` as root) and attach the report to your bug report. It lists versions, the image and filesystem state, kernel messages and the log; it contains the device model and module ids but no personal files.
+
 ## 🏗️ Building
 
 **Requirements:** `cargo` (Rust ≥ 1.85), `cargo-ndk` **or** `cross`, Node.js ≥ 18.

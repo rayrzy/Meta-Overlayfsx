@@ -59,27 +59,67 @@ file_size_mb() {
 #   check : read-only full check, never modifies the image
 # Returns 0 when the image is clean/repaired, non-zero when it is still broken.
 # When e2fsck is not available the check is skipped (returns 0 with a warning).
+# The exit code of the last run is kept in FSCK_LAST_RC (-1 = not checked), and everything
+# e2fsck reports about a problem is copied to the log, so a damaged image can be diagnosed.
+FSCK_LAST_RC=-1
+
+# fsck_log <mode> <rc> <output-file>: log the first lines e2fsck printed (only when rc != 0).
+fsck_log() {
+    local mode="$1" rc="$2" out="$3" level=WARN line
+    [ "$rc" -eq 0 ] && return 0
+    [ "$rc" -gt 2 ] && level=ERROR
+    [ -s "$out" ] || return 0
+    head -n 12 "$out" | while IFS= read -r line; do
+        log "$level" "fsck($mode) rc=$rc: $line"
+    done
+    [ "$(wc -l < "$out")" -gt 12 ] && log "$level" "fsck($mode): output truncated, $(wc -l < "$out") lines in total"
+    return 0
+}
+
 fsck_image() {
-    local img="$1" mode="${2:-preen}" rc=0
+    local img="$1" mode="${2:-preen}" rc=0 out
+    FSCK_LAST_RC=-1
     if ! command -v e2fsck >/dev/null 2>&1; then
         log WARN "e2fsck not available, skipping filesystem check"
         return 0
     fi
+    out="${TMPDIR:-/data/local/tmp}/overlayfsx_fsck.$$"
+    mkdir -p "$(dirname "$out")" 2>/dev/null
     case "$mode" in
-        preen) e2fsck -p "$img" >/dev/null 2>&1; rc=$? ;;
-        check) e2fsck -fn "$img" >/dev/null 2>&1; rc=$? ;;
+        preen) e2fsck -p "$img" >"$out" 2>&1; rc=$? ;;
+        check) e2fsck -fn "$img" >"$out" 2>&1; rc=$? ;;
         force)
-            e2fsck -fp "$img" >/dev/null 2>&1; rc=$?
+            e2fsck -fp "$img" >"$out" 2>&1; rc=$?
             if [ "$rc" -ge 4 ]; then
                 log WARN "e2fsck preen failed (rc=$rc), retrying with -fy"
-                e2fsck -fy "$img" >/dev/null 2>&1; rc=$?
+                e2fsck -fy "$img" >"$out" 2>&1; rc=$?
             fi
             ;;
     esac
+    fsck_log "$mode" "$rc" "$out"
+    rm -f "$out"
+    FSCK_LAST_RC=$rc
     # 0 = clean, 1 = errors corrected, 2 = corrected (reboot advised; irrelevant for an image file)
     [ "$rc" -le 2 ] && return 0
     log ERROR "e2fsck ($mode) reported rc=$rc for $img"
     return 1
+}
+
+# Remember the result of the last boot-time check of the modules image, for the WebUI:
+#   record_health <e2fsck-exit-code | status-word>   ->  "<epoch> <status> <rc>"
+HEALTH_FILE="$CONF_DIR/health"
+record_health() {
+    local arg="$1" status rc="-"
+    case "$arg" in
+        -1) return 0 ;;
+        0) status=clean; rc=0 ;;
+        1|2) status=repaired; rc=$arg ;;
+        [0-9]*) status=failed; rc=$arg ;;
+        *) status="$arg" ;;
+    esac
+    mkdir -p "$CONF_DIR" 2>/dev/null || return 0
+    echo "$(date +%s) $status $rc" > "$HEALTH_FILE.tmp" && mv "$HEALTH_FILE.tmp" "$HEALTH_FILE"
+    return 0
 }
 
 # Apply a resize request written by the WebUI ($CONF_DIR/resize_mb).

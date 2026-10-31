@@ -45,6 +45,9 @@
 - **Optimize Storage:** tries `fstrim` first. If that is not supported the optimization is queued and runs at the next boot with the image unmounted (`e2fsck -E discard`); the image is never zero-filled, copied or replaced while it is mounted (a copy of a live ext4 image can be inconsistent).
 - **Operation lock:** module installs, update copies, *Restore files* and live trims can no longer overlap (`/data/adb/overlayfsx.d/op.lock`; stale locks from a crash or an earlier boot are detected and removed).
 - **Low space warning:** the dashboard warns when the image has less than 64 MB or 10% free, with a shortcut to *Image Size*.
+- **Backup before risky operations:** an *Optimize* or *Resize* request makes a verified backup first (once per boot, best effort). Opt out with `touch /data/adb/overlayfsx.d/no_auto_backup`.
+- **Diagnosable filesystem checks:** what `e2fsck` reports is written to `overlayfsx.log`, and the dashboard shows the result of the last boot check (clean / repaired / errors / mount failed) and the age of the last backup.
+- **Diagnostics report:** *Settings -> Diagnostics -> Collect & copy* (or `sh /data/adb/metamodule/diag.sh`) gathers versions, image and superblock state, kernel messages and the log into one text report for bug reports.
 - **`xcp`:** 1 MiB buffered I/O with retrying reads, refuses identical src/dst, removes the destination on failure, `fsync`s the result.
 
 ## v1.3.4 - Kernel Inspector & Next-Gen WebUI
